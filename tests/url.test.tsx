@@ -57,6 +57,22 @@ describe("T2 URL 状态恢复与同步（App）", () => {
     expect(screen.getByText("第1页 共1页")).toBeInTheDocument();
   });
 
+  it("题目示例 URL ?q=接口&status=DOING&page=2：成功后被钳制回第 1 页并去掉越界 page", async () => {
+    window.history.replaceState(null, "", "/?q=%E6%8E%A5%E5%8F%A3&status=DOING&page=2");
+    const before = window.history.length;
+    render(<App />);
+
+    expect(await screen.findByText("任务列表接口对接")).toBeInTheDocument();
+    expect(screen.getByText("第1页 共1页")).toBeInTheDocument();
+    expect(screen.queryByText("登录功能开发")).not.toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(search().get("q")).toBe("接口");
+      expect(search().get("status")).toBe("DOING");
+      expect(search().has("page")).toBe(false);
+    });
+    expect(window.history.length).toBe(before);
+  });
   it("未提交的输入不写 URL", async () => {
     const user = userEvent.setup();
     render(<App />);
