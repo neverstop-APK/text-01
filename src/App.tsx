@@ -1,19 +1,72 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { StatusFilter } from "./types";
 import { useTaskSearch } from "./useTaskSearch";
-import { pageOf } from "./query";
+import { pageOf, readQuery, writeQuery } from "./query";
+
 export default function App() {
-  const [draft, setDraft] = useState("");
-  const [q, setQ] = useState("");
-  const [status, setStatus] = useState<StatusFilter>("ALL");
-  const [page, setPage] = useState(1);
-  const { tasks, loading, error } = useTaskSearch(q, status);
+  // T2：首次进入 / 刷新时从 URL 恢复已提交的搜索词、筛选与页码。
+  const [initial] = useState(() => readQuery(window.location.search));
+  const [draft, setDraft] = useState(initial.q);
+  const [q, setQ] = useState(initial.q);
+  const [status, setStatus] = useState<StatusFilter>(initial.status);
+  const [page, setPage] = useState(initial.page);
+
+  const { tasks, loading, error, retry, resolved } = useTaskSearch(q, status);
   const view = pageOf(tasks, page);
+  // tasks 是否确实来自“当前筛选条件”的那一次成功查询。
+  const isFresh =
+    resolved !== null && resolved.q === q && resolved.status === status;
+
+  // T2：只有当前查询成功落地后，才按结果页数钳制越界页码（replace，不新增历史项）。
+  // 加载中、出错、或结果还属于上一次查询时都不碰 URL，
+  // 避免用加载前的空列表或上一次查询结果提前把恢复的页码改成 1。
+  useEffect(() => {
+    if (loading || error || !isFresh) return;
+    const { current } = pageOf(tasks, page);
+    if (current === page) return;
+    setPage(current);
+    writeQuery({ q, status, page: current }, "replace");
+  }, [loading, error, isFresh, tasks, page, q, status]);
+
+  // T2：浏览器前进 / 后退，恢复输入、筛选、页码并重新发起对应查询。
+  useEffect(() => {
+    function onPopState() {
+      const next = readQuery(window.location.search);
+      setDraft(next.q);
+      setQ(next.q);
+      setStatus(next.status);
+      setPage(next.page);
+      retry();
+    }
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [retry]);
+
   function search(e: React.FormEvent) {
     e.preventDefault();
-    setQ(draft.trim());
+    const next = draft.trim();
+    setDraft(next);
+    // 同一条件再次提交时 effect 依赖不变，这里显式重试（失败后的重试）。
+    if (next === q) retry();
+    else setQ(next);
     setPage(1);
+    // 提交查询：trim 后页码回 1，并 replace 当前历史项。
+    writeQuery({ q: next, status, page: 1 }, "replace");
   }
+
+  function changeStatus(next: StatusFilter) {
+    setStatus(next);
+    setPage(1);
+    // 筛选变化：push 历史项，页码回 1。
+    writeQuery({ q, status: next, page: 1 }, "push");
+  }
+
+  function goToPage(next: number) {
+    setPage(next);
+    // 翻页：push 历史项。
+    writeQuery({ q, status, page: next }, "push");
+  }
+
   return (
     <>
       <header>
@@ -37,10 +90,7 @@ export default function App() {
             状态
             <select
               value={status}
-              onChange={(e) => {
-                setStatus(e.target.value as StatusFilter);
-                setPage(1);
-              }}
+              onChange={(e) => changeStatus(e.target.value as StatusFilter)}
             >
               <option value="ALL">全部状态</option>
               <option value="TODO">待办</option>
@@ -87,7 +137,7 @@ export default function App() {
         <nav className="pager" aria-label="分页">
           <button
             disabled={loading || view.current === 1}
-            onClick={() => setPage(view.current - 1)}
+            onClick={() => goToPage(view.current - 1)}
           >
             上一页
           </button>
@@ -96,7 +146,7 @@ export default function App() {
           </span>
           <button
             disabled={loading || view.current === view.pages}
-            onClick={() => setPage(view.current + 1)}
+            onClick={() => goToPage(view.current + 1)}
           >
             下一页
           </button>
